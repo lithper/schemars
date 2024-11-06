@@ -86,7 +86,7 @@ fn schema_from_json_value() -> TestResult {
         "bool": true,
         "null": null,
         "object": {
-            "array": ["foo", "bar"]
+            "array": ["foo", "bar", 1, 0.0]
         },
     }))?;
 

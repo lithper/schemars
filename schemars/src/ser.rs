@@ -345,18 +345,44 @@ impl serde::ser::SerializeSeq for SerializeSeq<'_> {
     where
         T: serde::Serialize,
     {
-        if self.items != Some(Schema::Bool(true)) {
-            let schema = value.serialize(Serializer {
-                gen: self.gen,
-                include_title: false,
-            })?;
-            match &self.items {
-                None => self.items = Some(schema),
-                Some(items) => {
-                    if items != &schema {
-                        self.items = Some(Schema::Bool(true))
-                    }
+        if self.items == Some(Schema::Bool(true)) {
+            return Ok(());
+        }
+
+        let schema = value.serialize(Serializer {
+            gen: self.gen,
+            include_title: false,
+        })?;
+
+        match &mut self.items {
+            None => self.items = Some(schema),
+            Some(items) if items == &schema => (),
+            Some(Schema::Object(SchemaObject {
+                subschemas: Some(subschemas),
+                ..
+            })) => {
+                let elements = subschemas.one_of.get_or_insert(vec![]);
+                if !elements.iter().any(|x| x == &schema) {
+                    elements.push(schema);
+
+                    // Schemas do not implement Ord. As a temporary hack, order by the string debug
+                    // representation, working under the assumption that this is a relatively rare
+                    // operation.
+                    elements.sort_by_key(|el| format!("{el:?}"));
                 }
+            }
+            Some(_) => {
+                self.items = Some(
+                    SchemaObject {
+                        instance_type: Some(InstanceType::Array.into()),
+                        subschemas: Some(Box::new(SubschemaValidation {
+                            one_of: Some(vec![self.items.take().unwrap(), schema]),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }
+                    .into(),
+                );
             }
         }
 
@@ -365,15 +391,23 @@ impl serde::ser::SerializeSeq for SerializeSeq<'_> {
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
         let items = self.items.unwrap_or(Schema::Bool(true));
-        Ok(SchemaObject {
-            instance_type: Some(InstanceType::Array.into()),
-            array: Some(Box::new(ArrayValidation {
-                items: Some(items.into()),
-                ..ArrayValidation::default()
-            })),
-            ..SchemaObject::default()
+        if let Schema::Object(SchemaObject {
+            subschemas: Some(_),
+            ..
+        }) = &items
+        {
+            Ok(items)
+        } else {
+            Ok(SchemaObject {
+                instance_type: Some(InstanceType::Array.into()),
+                array: Some(Box::new(ArrayValidation {
+                    items: Some(items.into()),
+                    ..ArrayValidation::default()
+                })),
+                ..SchemaObject::default()
+            }
+            .into())
         }
-        .into())
     }
 }
 
